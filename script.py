@@ -167,3 +167,37 @@ for item in prod:
 df = pd.DataFrame(results_products)
 df.to_csv(f"data{today}.csv", index=False)
 
+response_3 = requests.get(
+    'https://warply.s3.amazonaws.com/applications/ed840ad545884deeb6c6b699176797ed/basket-retailers/freshbasket.json?v=1730710976905',
+    headers={
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9,el;q=0.8',
+        'Connection': 'keep-alive',
+        'Origin': 'https://e-katanalotis.gov.gr',
+        'Referer': 'https://e-katanalotis.gov.gr/',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'cross-site',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'sec-ch-ua': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+    }
+)
+
+data = response_3.json()
+retailers = data['retailers'].keys()
+
+from_date_object = datetime.strptime(data['from'], '%d-%m-%Y')
+to_date_object = datetime.strptime(data['to'], '%d-%m-%Y')
+filename = f"fresh_basket_{str(from_date_object.day)}_{str(from_date_object.month)}_to_{str(to_date_object.day)}_{str(to_date_object.month)}_{str(to_date_object.year)}.csv"
+
+fresh_basket=[]
+for retail in retailers:
+    for i in data['retailers'][retail]['basket']:
+        i['retailer'] = retail
+        i['from'] = data['from']
+        i['to'] = data['to']
+        fresh_basket.append(i)
+
+pd.DataFrame(fresh_basket).to_csv(filename, index=False)
