@@ -31,7 +31,11 @@ jobs:
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         git add .
-        git commit -m 'Update data.csv'
-        git push
+        if ! git diff --quiet --cached; then
+            git commit -m 'Update data.csv'
+            git push
+        else
+            echo "No changes to commit"
+        fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
