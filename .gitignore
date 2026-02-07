@@ -162,3 +162,8 @@ cython_debug/
 #.idea/
 
 .DS_Store
+
+# Data files
+data.csv
+fresh_basket.csv
+csv_archive/
