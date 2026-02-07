@@ -14,7 +14,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVE_DIR = os.path.join(SCRIPT_DIR, "csv_archive")
 
 
-def merge_files(pattern: str, output_file: str) -> int:
+def merge_files(pattern: str, output_file: str, sort_by: str = None, date_columns: list = None) -> int:
     """Ενώνει αρχεία που ταιριάζουν με το pattern σε ένα output file."""
     files = glob.glob(os.path.join(ARCHIVE_DIR, pattern))
 
@@ -48,6 +48,16 @@ def merge_files(pattern: str, output_file: str) -> int:
     if before != after:
         print(f"  Αφαιρέθηκαν {before - after:,} διπλότυπα")
 
+    # Μετατροπή ημερομηνιών και ταξινόμηση
+    if date_columns:
+        for col in date_columns:
+            if col in merged.columns:
+                merged[col] = pd.to_datetime(merged[col], format="%d-%m-%Y")
+
+    if sort_by and sort_by in merged.columns:
+        print(f"  Ταξινόμηση κατά {sort_by}...")
+        merged = merged.sort_values(by=sort_by).reset_index(drop=True)
+
     # Αποθήκευση
     print("  Αποθήκευση...")
     output_path = os.path.join(SCRIPT_DIR, output_file)
@@ -71,13 +81,15 @@ def main():
 
     # Ένωση data files
     print("[1/2] Επεξεργασία data_*.csv...")
-    data_rows = merge_files("data_*.csv", "data.csv")
+    data_rows = merge_files("data_*.csv", "data.csv",
+                            sort_by="date", date_columns=["date"])
 
     print()
 
     # Ένωση fresh_basket files
     print("[2/2] Επεξεργασία fresh_basket_*.csv...")
-    fb_rows = merge_files("fresh_basket_*.csv", "fresh_basket.csv")
+    fb_rows = merge_files("fresh_basket_*.csv", "fresh_basket.csv",
+                          sort_by="from", date_columns=["from", "to"])
 
     print()
     print("=" * 50)
