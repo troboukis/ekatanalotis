@@ -57,13 +57,17 @@ python3 "$SCRIPT_DIR/merge_csv.py"
 # 5. Push στο GitHub
 echo ""
 echo "[5/5] Push στο GitHub..."
-if git diff --quiet && git diff --cached --quiet; then
-    echo "  Δεν υπάρχουν νέες αλλαγές για push"
-else
+# Commit νέες αλλαγές αν υπάρχουν
+if ! git diff --quiet || ! git diff --cached --quiet; then
     git add -A
     git commit -m "Update data.csv $(date '+%d-%m-%Y')"
+fi
+# Push αν υπάρχουν unpushed commits
+if [ -n "$(git log origin/main..HEAD)" ]; then
     git push origin main
     echo "  Push ολοκληρώθηκε"
+else
+    echo "  Δεν υπάρχουν αλλαγές για push"
 fi
 
 echo ""
