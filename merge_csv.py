@@ -14,7 +14,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVE_DIR = os.path.join(SCRIPT_DIR, "csv_archive")
 
 
-def merge_files(pattern: str, output_file: str, sort_by: str = None, date_columns: list = None) -> int:
+def merge_files(pattern: str, output_file: str, sort_by: str = None, date_columns: list = None, dtype: dict = None) -> int:
     """Ενώνει αρχεία που ταιριάζουν με το pattern σε ένα output file."""
     files = glob.glob(os.path.join(ARCHIVE_DIR, pattern))
 
@@ -28,7 +28,7 @@ def merge_files(pattern: str, output_file: str, sort_by: str = None, date_column
     dfs = []
     for f in tqdm(files, desc="  Διάβασμα", unit="αρχείο", mininterval=0, ncols=80):
         try:
-            df = pd.read_csv(f)
+            df = pd.read_csv(f, dtype=dtype)
             dfs.append(df)
         except Exception as e:
             tqdm.write(f"  Σφάλμα στο {os.path.basename(f)}: {e}")
@@ -82,7 +82,8 @@ def main():
     # Ένωση data files
     print("[1/2] Επεξεργασία data_*.csv...")
     data_rows = merge_files("data_*.csv", "data.csv",
-                            sort_by="date", date_columns=["date"])
+                            sort_by="date", date_columns=["date"],
+                            dtype={"product_id": str})
 
     print()
 
