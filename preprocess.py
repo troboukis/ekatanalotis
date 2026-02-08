@@ -75,17 +75,26 @@ def main():
     # Step 5: Per-category stats
     print("[5/6] Υπολογισμός stats (CAGR, slope, R²)...")
 
-    # Yearly means
-    yearly = df.groupby(["cat_clean", df["date"].dt.year])["price"].mean().unstack()
+    # CAGR — using first and last weekly median with actual time span
+    first_week_date = pd.Timestamp(week_start_dates[0])
+    last_week_date = pd.Timestamp(week_start_dates[-1])
+    n_years_actual = (last_week_date - first_week_date).days / 365
+
+    # V(t0) = median of first week, V(tn) = median of last week (per category)
+    first_week_col = week_order[0]
+    last_week_col = week_order[-1]
+    v_start = pivot[first_week_col]
+    v_end = pivot[last_week_col]
+
+    if n_years_actual > 0:
+        cagr = ((v_end / v_start) ** (1 / n_years_actual) - 1) * 100
+    else:
+        cagr = pd.Series(0.0, index=pivot.index)
+
+    # Total pct change & direction (also based on first/last week)
+    yearly = df.groupby(["cat_clean", df["date"].dt.year])["price"].median().unstack()
     years = sorted(yearly.columns)
     first_year, last_year = years[0], years[-1]
-    n_years = last_year - first_year
-
-    # CAGR
-    if n_years > 0:
-        cagr = ((yearly[last_year] / yearly[first_year]) ** (1 / n_years) - 1) * 100
-    else:
-        cagr = pd.Series(0.0, index=yearly.index)
 
     # Total pct change
     total_pct = ((yearly[last_year] - yearly[first_year]) / yearly[first_year] * 100)
@@ -94,7 +103,7 @@ def main():
     direction = np.sign(total_pct).map({1.0: "Αύξηση", -1.0: "Μείωση", 0.0: "Αμετάβλητη"}).fillna("Αμετάβλητη")
 
     # Slope per month via linear regression
-    monthly = df.groupby([df["date"].dt.to_period("M"), "cat_clean"])["price"].mean().reset_index()
+    monthly = df.groupby([df["date"].dt.to_period("M"), "cat_clean"])["price"].median().reset_index()
     monthly.columns = ["month", "cat_clean", "price"]
     monthly["month_num"] = monthly["month"].apply(lambda x: x.ordinal)
 
