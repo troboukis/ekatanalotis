@@ -75,32 +75,29 @@ def main():
     # Step 5: Per-category stats
     print("[5/6] Υπολογισμός stats (CAGR, slope, R²)...")
 
-    # CAGR — using first and last weekly median with actual time span
-    first_week_date = pd.Timestamp(week_start_dates[0])
+    # CAGR — from baseline to last week, annualized
+    # t0 = end of baseline period (last baseline week), tn = last week
+    baseline_end_date = pd.Timestamp(week_start_dates[baseline_weeks - 1])
     last_week_date = pd.Timestamp(week_start_dates[-1])
-    n_years_actual = (last_week_date - first_week_date).days / 365
+    n_years_actual = (last_week_date - baseline_end_date).days / 365
 
-    # V(t0) = median of first week, V(tn) = median of last week (per category)
-    first_week_col = week_order[0]
+    # V(t0) = baseline (median of first 8 weeks), V(tn) = median of last week
     last_week_col = week_order[-1]
-    v_start = pivot[first_week_col]
     v_end = pivot[last_week_col]
 
     if n_years_actual > 0:
-        cagr = ((v_end / v_start) ** (1 / n_years_actual) - 1) * 100
+        cagr = ((v_end / baseline) ** (1 / n_years_actual) - 1) * 100
     else:
         cagr = pd.Series(0.0, index=pivot.index)
 
-    # Total pct change & direction (also based on first/last week)
-    yearly = df.groupby(["cat_clean", df["date"].dt.year])["price"].median().unstack()
-    years = sorted(yearly.columns)
-    first_year, last_year = years[0], years[-1]
+    # Pct change from baseline (same basis as heatmap) — used for top 20 buttons
+    pct_from_baseline_last = ((v_end - baseline) / baseline * 100)
 
-    # Total pct change
-    total_pct = ((yearly[last_year] - yearly[first_year]) / yearly[first_year] * 100)
+    # Direction — based on baseline comparison
+    direction = np.sign(pct_from_baseline_last).map({1.0: "Αύξηση", -1.0: "Μείωση", 0.0: "Αμετάβλητη"}).fillna("Αμετάβλητη")
 
-    # Direction
-    direction = np.sign(total_pct).map({1.0: "Αύξηση", -1.0: "Μείωση", 0.0: "Αμετάβλητη"}).fillna("Αμετάβλητη")
+    # Typical change = median of all weekly pct_from_baseline values (excluding baseline period)
+    typical_pct = pct_from_baseline[week_order[baseline_weeks:]].median(axis=1)
 
     # Slope per month via linear regression
     monthly = df.groupby([df["date"].dt.to_period("M"), "cat_clean"])["price"].median().reset_index()
@@ -159,6 +156,29 @@ def main():
                 "last_year_median": round(float(pivot.loc[cat, last_year_week]), 2),
             })
 
+    # Robust z-score of WoW changes (MAD-based)
+    # Compute all WoW % changes across weeks
+    wow_all = pivot.pct_change(axis=1) * 100  # WoW % change for every week
+    wow_median = wow_all.median(axis=1)       # median of each category's WoW changes
+    wow_mad_raw = wow_all.subtract(wow_median, axis=0).abs().median(axis=1)
+    wow_mad = (wow_mad_raw * 1.4826).clip(lower=0.5)  # scale + floor at 0.5%
+
+    # Z-score for the latest week
+    latest_wow = wow_all[last_week]
+    zscore_latest = (latest_wow - wow_median) / wow_mad
+
+    # Top 5 unusual increases (highest positive z-score)
+    top5_zscore = []
+    zscore_valid = zscore_latest.dropna()
+    for cat in zscore_valid.nlargest(5).index:
+        top5_zscore.append({
+            "name": cat,
+            "zscore": round(float(zscore_valid[cat]), 2),
+            "wow_pct": round(float(latest_wow[cat]), 1),
+            "current_median": round(float(pivot.loc[cat, last_week]), 2),
+            "prev_median": round(float(pivot.loc[cat, prev_week]), 2) if prev_week else None,
+        })
+
     # Exclude baseline period — show all weeks after the first 8
     heatmap_weeks = week_order[baseline_weeks:]
     heatmap_dates = week_start_dates[baseline_weeks:]
@@ -172,7 +192,10 @@ def main():
             "slope_per_month": float(growth.loc[cat, "slope_per_month"]) if cat in growth.index and pd.notna(growth.loc[cat, "slope_per_month"]) else None,
             "r_squared": float(growth.loc[cat, "r_squared"]) if cat in growth.index and pd.notna(growth.loc[cat, "r_squared"]) else None,
             "direction": direction.get(cat, "Αμετάβλητη"),
-            "pct_change_total": round(float(total_pct.get(cat, np.nan)), 1) if pd.notna(total_pct.get(cat, np.nan)) else None,
+            "pct_from_baseline": round(float(pct_from_baseline_last.get(cat, np.nan)), 1) if pd.notna(pct_from_baseline_last.get(cat, np.nan)) else None,
+            "pct_typical": round(float(typical_pct.get(cat, np.nan)), 1) if pd.notna(typical_pct.get(cat, np.nan)) else None,
+            "zscore": round(float(zscore_latest.get(cat, np.nan)), 2) if pd.notna(zscore_latest.get(cat, np.nan)) else None,
+            "wow_latest": round(float(latest_wow.get(cat, np.nan)), 1) if pd.notna(latest_wow.get(cat, np.nan)) else None,
         }
 
         # Full weekly_median for line chart, trimmed pct for heatmap
@@ -198,6 +221,7 @@ def main():
             "top5_wow": top5_wow,
             "top5_yoy": top5_yoy,
             "wow_summary": wow_summary,
+            "top5_zscore": top5_zscore,
         },
         "categories": categories_json,
     }
