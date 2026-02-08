@@ -89,7 +89,7 @@ cd "$PAGES_DIR/.."
 if ! git diff --quiet || ! git diff --cached --quiet; then
     git add -A
     git commit -m "Update prices dashboard $(date '+%d-%m-%Y')"
-    git push origin main
+    git push origin master
     echo "  Push troboukis.github.io ολοκληρώθηκε"
 else
     echo "  Δεν υπάρχουν αλλαγές στο github.io"
