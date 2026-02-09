@@ -212,6 +212,7 @@ def main():
         "all_weeks": week_order,
         "all_week_start_dates": week_start_dates,
         "last_updated": pd.Timestamp.now().strftime("%Y-%m-%d"),
+        "last_data_date": df["date"].max().strftime("%Y-%m-%d"),
         "last_week": last_week,
         "prev_week": prev_week,
         "last_year_week": last_year_week if last_year_week in week_order else None,
