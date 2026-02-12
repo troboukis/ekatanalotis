@@ -115,8 +115,10 @@ def main():
     # Step 6: Weekly highlights — top 5 increases
     print("[6/6] Υπολογισμός weekly highlights...")
 
-    last_week = week_order[-1]
-    prev_week = week_order[-2] if len(week_order) >= 2 else None
+    # Find last weeks WITH data (skip gap weeks that have all NaN)
+    weeks_with_data = [w for w in week_order if pivot[w].notna().any()]
+    last_week = weeks_with_data[-1]
+    prev_week = weeks_with_data[-2] if len(weeks_with_data) >= 2 else None
 
     # Week-over-week
     top5_wow = []
@@ -163,8 +165,11 @@ def main():
     wow_mad_raw = wow_all.subtract(wow_median, axis=0).abs().median(axis=1)
     wow_mad = (wow_mad_raw * 1.4826).clip(lower=0.5)  # scale + floor at 0.5%
 
-    # Z-score for the latest week
-    latest_wow = wow_all[last_week]
+    # Z-score for the latest week — use prev week WITH data (not adjacent column)
+    if prev_week:
+        latest_wow = ((pivot[last_week] - pivot[prev_week]) / pivot[prev_week] * 100)
+    else:
+        latest_wow = pd.Series(np.nan, index=pivot.index)
     zscore_latest = (latest_wow - wow_median) / wow_mad
 
     # Top 5 unusual increases (highest positive z-score)
@@ -176,7 +181,7 @@ def main():
             "zscore": round(float(zscore_valid[cat]), 2),
             "wow_pct": round(float(latest_wow[cat]), 1),
             "current_median": round(float(pivot.loc[cat, last_week]), 2),
-            "prev_median": round(float(pivot.loc[cat, prev_week]), 2) if prev_week else None,
+            "prev_median": round(float(pivot.loc[cat, prev_week]), 2) if prev_week and pd.notna(pivot.loc[cat, prev_week]) else None,
         })
 
     # Exclude baseline period — show all weeks after the first 8
