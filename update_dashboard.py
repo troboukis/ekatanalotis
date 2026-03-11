@@ -416,7 +416,8 @@ def main():
     csv_files = sorted(glob.glob(os.path.join(SCRIPT_DIR, "data_*.csv")))
 
     if not csv_files:
-        raise FileNotFoundError(f"Δεν βρέθηκαν αρχεία data_*.csv στο {SCRIPT_DIR}")
+        print("  Δεν βρέθηκαν αρχεία data_*.csv — τίποτα να γίνει.")
+        return
 
     print("\n[0/3] Έλεγχος αν χρειάζεται ενημέρωση...")
     if is_up_to_date(json_path, csv_files):
