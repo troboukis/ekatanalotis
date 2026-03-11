@@ -38,11 +38,12 @@ def _filename_date(path: str) -> pd.Timestamp:
 
 def is_up_to_date(json_path: str, csv_files: list) -> bool:
     """
-    Returns True if dashboard_data.json already reflects the latest CSV data.
+    Returns True if dashboard_data.json already reflects the newest CSV's data.
 
-    Reads last_data_date from the JSON, then reads only the `date` column of
-    the newest CSV file (by filename date). If the max date inside that CSV is
-    the same as last_data_date, there is nothing new to process.
+    Compares the API date inside the newest CSV to last_data_date in the JSON.
+    The API date changes whenever the API publishes new prices — even if the
+    ISO week number stays the same — so a date change means the week's medians
+    need to be recalculated with fresh prices.
     """
     if not os.path.exists(json_path):
         return False
@@ -57,8 +58,7 @@ def is_up_to_date(json_path: str, csv_files: list) -> bool:
     raw_dates = pd.read_csv(newest_csv, usecols=["date"])["date"]
     csv_max_date = pd.to_datetime(raw_dates, format="%d-%m-%Y").max()
 
-    json_date = pd.Timestamp(last_data_date)
-    if csv_max_date <= json_date:
+    if csv_max_date <= pd.Timestamp(last_data_date):
         print(f"  Ήδη ενημερωμένο (JSON: {last_data_date}, νεότερο CSV: {csv_max_date.date()})")
         return True
 
