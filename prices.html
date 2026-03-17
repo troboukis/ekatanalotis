@@ -491,14 +491,17 @@ let sortAsc = false;
 let activeLineChartCat = null;
 
 // ── Load Data ──
-fetch('dashboard_data.json')
+const dashboardDataUrl = new URL('https://raw.githubusercontent.com/troboukis/ekatanalotis/refs/heads/main/dashboard_data.json');
+dashboardDataUrl.searchParams.set('_', Date.now());
+
+fetch(dashboardDataUrl, { cache: 'no-store' })
   .then(r => r.json())
   .then(data => {
     DATA = data;
     document.getElementById('loading').style.display = 'none';
     document.getElementById('content').style.display = 'block';
     document.getElementById('updated-date').textContent =
-      `Τελευταία εβδομάδα: ${data.week_start_dates[data.week_start_dates.length - 1]} (${data.last_week}) · ${data.categories.length} κατηγορίες · ${data.weeks.length} εβδομάδες`;
+      `Τελευταία εβδομάδα: ${data.week_start_dates[data.week_start_dates.length - 1]} (${data.last_week}) · Τελευταία ημερήσια ενημέρωση: ${data.last_data_date} · ${data.categories.length} κατηγορίες · ${data.weeks.length} εβδομάδες`;
     init();
   })
   .catch(err => {
