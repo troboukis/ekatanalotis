@@ -24,6 +24,12 @@ from scipy.stats import linregress
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASELINE_WEEKS = 8
+CURRENT_WEEK_DATA = os.path.join(SCRIPT_DIR, "current_week_data.csv")
+DEDUP_COLS = ["product_id", "merchant", "date", "category_name", "price"]
+CURRENT_WEEK_COLS = [
+    "product_id", "name", "date", "unit", "category_name", "category_codes",
+    "monimi_meiosi", "promo", "supplier_name", "supplier_code", "merchant", "price",
+]
 
 
 # ── Early-exit check ──────────────────────────────────────────────────────────
@@ -89,34 +95,89 @@ def pivot_from_json(data: dict) -> tuple:
 
 # ── New CSV ingestion ─────────────────────────────────────────────────────────
 
-def load_new_csv_week(csv_path: str) -> tuple:
+def load_new_csv_week_rows(csv_path: str) -> tuple:
     """
-    Load one daily CSV and return the new week's aggregated data.
+    Load one daily CSV and return the raw rows that belong to its dominant week.
 
     Returns:
         year_week      – e.g. "2026-W11"
         week_start     – "YYYY-MM-DD" of Monday that starts the week
-        medians        – dict {cat_clean: median_price}
+        week_rows      – DataFrame of raw rows for the active week
         last_data_date – "YYYY-MM-DD" of the most recent date in the CSV
     """
-    df = pd.read_csv(csv_path, usecols=["date", "category_name", "price"],
-                     dtype={"price": float})
-    df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y")
-    df["cat_clean"] = df["category_name"].str.rsplit(",", n=1).str[-1].str.strip()
+    df = pd.read_csv(
+        csv_path,
+        usecols=CURRENT_WEEK_COLS,
+        dtype={"product_id": str, "price": float},
+    )
+    df["date_dt"] = pd.to_datetime(df["date"], format="%d-%m-%Y")
 
-    iso = df["date"].dt.isocalendar()
+    iso = df["date_dt"].dt.isocalendar()
     df["year_week"] = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
-    df["week_start"] = df["date"] - pd.to_timedelta(df["date"].dt.dayofweek, unit="D")
+    df["week_start"] = df["date_dt"] - pd.to_timedelta(df["date_dt"].dt.dayofweek, unit="D")
 
     # Take the dominant week (in case dates straddle a week boundary)
     dominant_week = df["year_week"].value_counts().index[0]
-    week_df = df[df["year_week"] == dominant_week]
+    week_df = df[df["year_week"] == dominant_week].copy()
 
     week_start = week_df["week_start"].iloc[0].strftime("%Y-%m-%d")
-    medians = week_df.groupby("cat_clean")["price"].median().to_dict()
-    last_data_date = df["date"].max().strftime("%Y-%m-%d")
+    last_data_date = df["date_dt"].max().strftime("%Y-%m-%d")
+    week_df = week_df[CURRENT_WEEK_COLS].copy()
 
-    return dominant_week, week_start, medians, last_data_date
+    return dominant_week, week_start, week_df, last_data_date
+
+
+def rebuild_week_medians(week_df: pd.DataFrame) -> dict:
+    """Compute category medians from the accumulated raw rows of the active week."""
+    med_df = week_df[["category_name", "price"]].copy()
+    med_df["cat_clean"] = med_df["category_name"].str.rsplit(",", n=1).str[-1].str.strip()
+    return med_df.groupby("cat_clean")["price"].median().to_dict()
+
+
+def get_week_info_from_rows(df: pd.DataFrame) -> tuple:
+    """Infer year-week and Monday start from an accumulated current-week CSV."""
+    dates = pd.to_datetime(df["date"], format="%d-%m-%Y")
+    iso = dates.dt.isocalendar()
+    year_week = (iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)).value_counts().index[0]
+    week_start = (dates - pd.to_timedelta(dates.dt.dayofweek, unit="D")).iloc[0].strftime("%Y-%m-%d")
+    return year_week, week_start
+
+
+def update_current_week_data(current_week_path: str, new_week: str, new_rows: pd.DataFrame) -> tuple:
+    """
+    Maintain a tracked accumulator for the active week and return its medians.
+
+    - Same week: append new rows and deduplicate.
+    - New week: replace the accumulator with the new week's first snapshot.
+    """
+    if os.path.exists(current_week_path):
+        existing = pd.read_csv(
+            current_week_path,
+            usecols=CURRENT_WEEK_COLS,
+            dtype={"product_id": str, "price": float},
+        )
+        existing_week, _ = get_week_info_from_rows(existing)
+        if existing_week == new_week:
+            combined = pd.concat([existing, new_rows], ignore_index=True)
+        else:
+            combined = new_rows.copy()
+    else:
+        combined = new_rows.copy()
+
+    before = len(combined)
+    combined = combined.drop_duplicates(subset=DEDUP_COLS)
+    removed = before - len(combined)
+    if removed:
+        print(f"  Αφαιρέθηκαν {removed:,} διπλότυπα από το current_week_data.csv")
+
+    combined = combined.sort_values(["date", "category_name", "product_id", "merchant"]).reset_index(drop=True)
+    combined.to_csv(current_week_path, index=False)
+
+    stored_week, stored_week_start = get_week_info_from_rows(combined)
+    stored_last_data_date = pd.to_datetime(combined["date"], format="%d-%m-%Y").max().strftime("%Y-%m-%d")
+    stored_medians = rebuild_week_medians(combined)
+
+    return stored_week, stored_week_start, stored_medians, stored_last_data_date
 
 
 def update_pivot(pivot: pd.DataFrame, week_dates_map: dict,
@@ -178,11 +239,10 @@ def pivot_from_raw_csvs(files: list) -> tuple:
         week_dates_map – dict {year_week: "YYYY-MM-DD"}
         last_data_date – "YYYY-MM-DD"
     """
-    dedup_cols = ["product_id", "merchant", "date", "category_name", "price"]
     dfs = []
     for f in files:
         try:
-            dfs.append(pd.read_csv(f, usecols=dedup_cols,
+            dfs.append(pd.read_csv(f, usecols=DEDUP_COLS,
                                    dtype={"product_id": str, "price": float}))
         except Exception as e:
             print(f"  Παράλειψη {os.path.basename(f)}: {e}")
@@ -192,7 +252,7 @@ def pivot_from_raw_csvs(files: list) -> tuple:
 
     merged = pd.concat(dfs, ignore_index=True)
     before = len(merged)
-    merged = merged.drop_duplicates(subset=dedup_cols)
+    merged = merged.drop_duplicates(subset=DEDUP_COLS)
     if before != len(merged):
         print(f"  Αφαιρέθηκαν {before - len(merged):,} διπλότυπα")
 
@@ -435,8 +495,13 @@ def main():
         print(f"  {len(pivot.index)} κατηγορίες, {len(pivot.columns)} εβδομάδες από JSON")
 
         print(f"\n[2/3] Φόρτωση νέου CSV: {os.path.basename(newest_csv)}")
-        new_week, new_week_start, new_medians, last_data_date = load_new_csv_week(newest_csv)
-        print(f"  Εβδομάδα: {new_week}, ημερομηνία: {last_data_date}, κατηγορίες: {len(new_medians)}")
+        new_week, new_week_start, new_rows, csv_last_data_date = load_new_csv_week_rows(newest_csv)
+        print(f"  Εβδομάδα: {new_week}, ημερομηνία CSV: {csv_last_data_date}, γραμμές: {len(new_rows):,}")
+
+        new_week, new_week_start, new_medians, last_data_date = update_current_week_data(
+            CURRENT_WEEK_DATA, new_week, new_rows
+        )
+        print(f"  current_week_data.csv: εβδομάδα {new_week}, ημερομηνία {last_data_date}, κατηγορίες: {len(new_medians)}")
 
         pivot = update_pivot(pivot, week_dates_map, new_week, new_week_start, new_medians)
 
