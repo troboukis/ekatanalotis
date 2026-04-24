@@ -288,7 +288,74 @@ def pivot_from_raw_csvs(files: list) -> tuple:
 
 # ── Stats computation ─────────────────────────────────────────────────────────
 
-def compute_stats(pivot: pd.DataFrame, week_dates_map: dict, last_data_date: str) -> dict:
+def update_baseline_product_analysis(
+    existing_analysis: dict,
+    week_df: pd.DataFrame,
+    week_order: list,
+    week_start_dates: list,
+    new_week: str,
+) -> dict:
+    """Update the fixed baseline-product weekly averages for one active week."""
+    if not existing_analysis or not existing_analysis.get("categories"):
+        return {
+            "method": "baseline_nearest_products",
+            "all_weeks": week_order,
+            "all_week_start_dates": week_start_dates,
+            "categories": {},
+        }
+
+    analysis = {
+        "method": existing_analysis.get("method", "baseline_nearest_products"),
+        "all_weeks": week_order,
+        "all_week_start_dates": week_start_dates,
+        "categories": {},
+    }
+
+    week_pos = week_order.index(new_week) if new_week in week_order else None
+    current = week_df[["product_id", "category_name", "price"]].copy()
+    current["cat_clean"] = current["category_name"].str.rsplit(",", n=1).str[-1].str.strip()
+
+    selected_pairs = []
+    for cat, cat_data in existing_analysis["categories"].items():
+        for product in cat_data.get("products", []):
+            selected_pairs.append({"cat_clean": cat, "product_id": str(product["product_id"])})
+
+    if selected_pairs:
+        selected_df = pd.DataFrame(selected_pairs).drop_duplicates()
+        tracked = current.merge(selected_df, on=["cat_clean", "product_id"], how="inner")
+        product_medians = (
+            tracked
+            .groupby(["cat_clean", "product_id"], dropna=False)["price"]
+            .median()
+            .reset_index(name="weekly_product_median")
+        )
+        week_averages = product_medians.groupby("cat_clean")["weekly_product_median"].mean()
+    else:
+        week_averages = pd.Series(dtype=float)
+
+    for cat, cat_data in existing_analysis["categories"].items():
+        old_weeks = existing_analysis.get("all_weeks", [])
+        old_values = dict(zip(old_weeks, cat_data.get("weekly_average", [])))
+        values = [old_values.get(w) for w in week_order]
+
+        if week_pos is not None:
+            val = week_averages.get(cat, np.nan)
+            values[week_pos] = round(float(val), 2) if pd.notna(val) else None
+
+        analysis["categories"][cat] = {
+            **cat_data,
+            "weekly_average": values,
+        }
+
+    return analysis
+
+
+def compute_stats(
+    pivot: pd.DataFrame,
+    week_dates_map: dict,
+    last_data_date: str,
+    baseline_product_analysis: dict | None = None,
+) -> dict:
     """Compute all dashboard stats from the weekly-median pivot."""
     week_order = list(pivot.columns)
     week_start_dates = [week_dates_map[w] for w in week_order]
@@ -461,6 +528,12 @@ def compute_stats(pivot: pd.DataFrame, week_dates_map: dict, last_data_date: str
             "wow_summary": wow_summary,
             "top5_zscore": top5_zscore,
         },
+        "baseline_product_analysis": baseline_product_analysis or {
+            "method": "baseline_nearest_products",
+            "all_weeks": week_order,
+            "all_week_start_dates": week_start_dates,
+            "categories": {},
+        },
         "categories": categories_json,
     }
 
@@ -492,6 +565,7 @@ def main():
         with open(json_path, encoding="utf-8") as f:
             existing = json.load(f)
         pivot, week_dates_map = pivot_from_json(existing)
+        existing_baseline_products = existing.get("baseline_product_analysis")
         print(f"  {len(pivot.index)} κατηγορίες, {len(pivot.columns)} εβδομάδες από JSON")
 
         print(f"\n[2/3] Φόρτωση νέου CSV: {os.path.basename(newest_csv)}")
@@ -504,16 +578,29 @@ def main():
         print(f"  current_week_data.csv: εβδομάδα {new_week}, ημερομηνία {last_data_date}, κατηγορίες: {len(new_medians)}")
 
         pivot = update_pivot(pivot, week_dates_map, new_week, new_week_start, new_medians)
+        current_week_rows = pd.read_csv(
+            CURRENT_WEEK_DATA,
+            usecols=CURRENT_WEEK_COLS,
+            dtype={"product_id": str, "price": float},
+        )
+        baseline_product_analysis = update_baseline_product_analysis(
+            existing_baseline_products,
+            current_week_rows,
+            list(pivot.columns),
+            [week_dates_map[w] for w in pivot.columns],
+            new_week,
+        )
 
     else:
         # ── Bootstrap from raw CSVs ───────────────────────────────────────────
         print(f"\n[1/3] Δεν υπάρχει JSON — φόρτωση όλων των CSV από μηδέν...")
         print(f"  (Απαιτούνται αρκετά ιστορικά αρχεία CSV)")
         pivot, week_dates_map, last_data_date = pivot_from_raw_csvs(csv_files)
+        baseline_product_analysis = None
         print(f"  {len(pivot.index)} κατηγορίες, {len(pivot.columns)} εβδομάδες")
 
     print("\n[3/3] Υπολογισμός στατιστικών...")
-    output = compute_stats(pivot, week_dates_map, last_data_date)
+    output = compute_stats(pivot, week_dates_map, last_data_date, baseline_product_analysis)
 
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False)
