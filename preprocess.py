@@ -24,7 +24,8 @@ def main():
         os.path.join(SCRIPT_DIR, "data.csv"),
         parse_dates=["date"],
         date_format="%Y-%m-%d",
-        usecols=["date", "category_name", "price"],
+        usecols=["product_id", "name", "date", "unit", "category_name", "price"],
+        dtype={"product_id": str},
     )
     print(f"  {len(df):,} γραμμές")
 
@@ -71,6 +72,15 @@ def main():
     baseline_cols = week_order[:baseline_weeks]
     baseline = pivot[baseline_cols].median(axis=1)  # median τιμή ανά κατηγορία στις πρώτες 8 εβδομάδες
     pct_from_baseline = pivot.subtract(baseline, axis=0).divide(baseline, axis=0) * 100
+
+    print("     Υπολογισμός σταθερού καλαθιού baseline...")
+    baseline_products = build_baseline_product_analysis(
+        df=df,
+        baseline=baseline,
+        baseline_cols=baseline_cols,
+        week_order=week_order,
+        week_start_dates=week_start_dates,
+    )
 
     # Step 5: Per-category stats
     print("[5/6] Υπολογισμός stats (CAGR, slope, R²)...")
@@ -229,6 +239,7 @@ def main():
             "wow_summary": wow_summary,
             "top5_zscore": top5_zscore,
         },
+        "baseline_product_analysis": baseline_products,
         "categories": categories_json,
     }
 
@@ -245,6 +256,93 @@ def main():
     print(f"  Μέγεθος: {file_size / 1024:.0f} KB")
     print(f"  Top 5 WoW: {[x['name'] for x in top5_wow]}")
     print(f"  Top 5 YoY: {[x['name'] for x in top5_yoy]}")
+
+
+def build_baseline_product_analysis(
+    df: pd.DataFrame,
+    baseline: pd.Series,
+    baseline_cols: list,
+    week_order: list,
+    week_start_dates: list,
+) -> dict:
+    """
+    For each category, lock the product(s) closest to the category baseline
+    median and track their average weekly price through time.
+    """
+    baseline_df = df[df["year_week"].isin(baseline_cols)].copy()
+    product_baseline = (
+        baseline_df
+        .groupby(["cat_clean", "product_id", "name", "unit"], dropna=False)["price"]
+        .median()
+        .reset_index(name="baseline_price")
+    )
+
+    selected_rows = []
+    for cat, group in product_baseline.groupby("cat_clean", sort=False):
+        target = baseline.get(cat, np.nan)
+        if pd.isna(target) or group.empty:
+            continue
+        distance = (group["baseline_price"] - target).abs()
+        min_distance = distance.min()
+        selected = group[distance == min_distance].copy()
+        selected["target_price"] = target
+        selected["distance_from_target"] = min_distance
+        selected_rows.append(selected)
+
+    if not selected_rows:
+        return {
+            "method": "baseline_nearest_products",
+            "all_weeks": week_order,
+            "all_week_start_dates": week_start_dates,
+            "categories": {},
+        }
+
+    selected_df = pd.concat(selected_rows, ignore_index=True)
+    selected_pairs = selected_df[["cat_clean", "product_id"]].drop_duplicates()
+
+    tracked = df.merge(selected_pairs, on=["cat_clean", "product_id"], how="inner")
+    product_weekly = (
+        tracked
+        .groupby(["cat_clean", "year_week", "product_id"], dropna=False)["price"]
+        .median()
+        .reset_index(name="weekly_product_median")
+    )
+    weekly_average = (
+        product_weekly
+        .groupby(["cat_clean", "year_week"], dropna=False)["weekly_product_median"]
+        .mean()
+        .unstack()
+        .reindex(columns=week_order)
+    )
+
+    categories = {}
+    for cat, group in selected_df.groupby("cat_clean", sort=True):
+        target = baseline.get(cat, np.nan)
+        values = weekly_average.loc[cat] if cat in weekly_average.index else pd.Series(np.nan, index=week_order)
+        categories[cat] = {
+            "baseline_price": round(float(target), 2) if pd.notna(target) else None,
+            "selection": "exact" if group["distance_from_target"].iloc[0] == 0 else "nearest",
+            "product_count": int(group["product_id"].nunique()),
+            "products": [
+                {
+                    "product_id": str(row.product_id),
+                    "name": row.name,
+                    "unit": row.unit,
+                    "baseline_price": round(float(row.baseline_price), 2),
+                }
+                for row in group.itertuples(index=False)
+            ],
+            "weekly_average": [
+                round(float(v), 2) if pd.notna(v) else None for v in values
+            ],
+        }
+
+    return {
+        "method": "baseline_nearest_products",
+        "all_weeks": week_order,
+        "all_week_start_dates": week_start_dates,
+        "categories": categories,
+    }
 
 
 if __name__ == "__main__":
